@@ -1,6 +1,7 @@
-// Board view: 64 real <button>s (so keyboard and screen readers work), click-to-move,
-// pointer-based drag and drop, and the promotion picker. It holds no game rules;
-// main.js tells it what to draw and receives square clicks / drops back.
+// Board view: an ARIA grid (8 rows x 8 gridcells) that is a single tab stop with
+// arrow-key navigation (roving tabindex), click-to-move, pointer drag and drop,
+// and the promotion picker. It holds no game rules; main.js tells it what to draw
+// and receives square activations / drops back.
 
 const FILES = 'abcdefgh';
 const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
@@ -16,7 +17,7 @@ export class Board {
     this.onDrop = onDrop;
     this.canDrag = canDrag;
     this.orientation = 'w';
-    this.squares = new Map();
+    this.cursor = null; // square holding the roving tab stop
     this.drag = null;
     this.promo = null;
     this.build();
@@ -25,19 +26,34 @@ export class Board {
   build() {
     this.root.classList.add('board');
     this.root.setAttribute('role', 'grid');
-    for (let i = 0; i < 64; i++) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'sq';
-      b.innerHTML = '<span class="piece" aria-hidden="true"></span><span class="coord rank" aria-hidden="true"></span><span class="coord file" aria-hidden="true"></span>';
-      this.root.appendChild(b);
+    this.root.setAttribute('aria-describedby', 'board-help');
+    this.cells = [];
+    for (let r = 0; r < 8; r++) {
+      const row = document.createElement('div');
+      row.className = 'rank';
+      row.setAttribute('role', 'row');
+      for (let c = 0; c < 8; c++) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'sq';
+        b.setAttribute('role', 'gridcell');
+        b.tabIndex = -1;
+        b.innerHTML = '<span class="piece" aria-hidden="true"></span><span class="coord rank-label" aria-hidden="true"></span><span class="coord file-label" aria-hidden="true"></span>';
+        row.appendChild(b);
+        this.cells.push(b);
+      }
+      this.root.appendChild(row);
     }
-    this.cells = [...this.root.querySelectorAll('.sq')];
 
     this.root.addEventListener('pointerdown', (e) => this.pointerDown(e));
     this.root.addEventListener('pointermove', (e) => this.pointerMove(e));
     this.root.addEventListener('pointerup', (e) => this.pointerUp(e));
     this.root.addEventListener('pointercancel', () => this.endDrag());
+    this.root.addEventListener('keydown', (e) => this.keyDown(e));
+    this.root.addEventListener('focusin', (e) => {
+      const cell = e.target.closest('.sq');
+      if (cell) this.setCursor(cell.dataset.square);
+    });
     // Keyboard activation (Enter/Space) arrives as a click with detail 0.
     this.root.addEventListener('click', (e) => {
       const cell = e.target.closest('.sq');
@@ -49,6 +65,47 @@ export class Board {
   squareOfIndex(i) {
     const r = Math.floor(i / 8), c = i % 8;
     return this.orientation === 'w' ? FILES[c] + (8 - r) : FILES[7 - c] + (r + 1);
+  }
+
+  indexOfSquare(sq) {
+    const c = FILES.indexOf(sq[0]), rank = Number(sq[1]);
+    return this.orientation === 'w' ? (8 - rank) * 8 + c : (rank - 1) * 8 + (7 - c);
+  }
+
+  cellOf(sq) { return this.cells[this.indexOfSquare(sq)]; }
+
+  setCursor(sq, { focus = false } = {}) {
+    if (!sq) return;
+    if (this.cursor !== sq) {
+      if (this.cursor) this.cellOf(this.cursor).tabIndex = -1;
+      this.cursor = sq;
+    }
+    const cell = this.cellOf(sq);
+    cell.tabIndex = 0;
+    if (focus) cell.focus();
+  }
+
+  hasFocus() { return this.root.contains(document.activeElement); }
+
+  // Arrow keys move in screen directions, so they follow the board's orientation.
+  keyDown(e) {
+    if (this.promo || e.altKey || e.ctrlKey || e.metaKey) return;
+    const i = this.indexOfSquare(this.cursor || this.squareOfIndex(56));
+    let r = Math.floor(i / 8), c = i % 8;
+    switch (e.key) {
+      case 'ArrowUp': r = Math.max(0, r - 1); break;
+      case 'ArrowDown': r = Math.min(7, r + 1); break;
+      case 'ArrowLeft': c = Math.max(0, c - 1); break;
+      case 'ArrowRight': c = Math.min(7, c + 1); break;
+      case 'Home': c = 0; break;
+      case 'End': c = 7; break;
+      case 'PageUp': r = 0; break;
+      case 'PageDown': r = 7; break;
+      default: return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    this.setCursor(this.squareOfIndex(r * 8 + c), { focus: true });
   }
 
   // view: { board (chess.js 8x8), lastMove {from,to}, check (square), selected, targets [], interactive, legalHints }
@@ -63,9 +120,10 @@ export class Board {
       const rank = Number(sq[1]);
       const piece = view.board[8 - rank][file];
       const light = (file + rank) % 2 === 1;
+      const isLast = view.lastMove && (view.lastMove.from === sq || view.lastMove.to === sq);
       cell.dataset.square = sq;
       cell.className = 'sq ' + (light ? 'light' : 'dark');
-      if (view.lastMove && (view.lastMove.from === sq || view.lastMove.to === sq)) cell.classList.add('last');
+      if (isLast) cell.classList.add('last');
       if (view.selected === sq) cell.classList.add('selected');
       if (view.check === sq) cell.classList.add('check');
       if (targets.has(sq)) cell.classList.add(piece ? 'target-capture' : 'target');
@@ -73,15 +131,18 @@ export class Board {
       p.textContent = piece ? glyph(piece.type) : '';
       p.className = 'piece' + (piece ? (piece.color === 'w' ? ' white' : ' black') : '');
       if (this.drag && this.drag.from === sq && this.drag.active) p.classList.add('lifted');
-      const isLeftCol = i % 8 === 0, isBottomRow = i >= 56;
-      cell.children[1].textContent = isLeftCol ? String(rank) : '';
-      cell.children[2].textContent = isBottomRow ? sq[0] : '';
-      let label = sq;
-      if (piece) label += `, ${piece.color === 'w' ? 'white' : 'black'} ${NAME[piece.type]}`;
-      if (view.selected === sq) label += ', selected';
-      if (targets.has(sq)) label += ', legal move';
-      cell.setAttribute('aria-label', label);
+      cell.children[1].textContent = i % 8 === 0 ? String(rank) : '';
+      cell.children[2].textContent = i >= 56 ? sq[0] : '';
+      const parts = [sq];
+      parts.push(piece ? `${piece.color === 'w' ? 'white' : 'black'} ${NAME[piece.type]}` : 'empty');
+      if (view.selected === sq) parts.push('selected');
+      if (view.check === sq) parts.push('in check');
+      if (targets.has(sq)) parts.push(piece ? 'can capture' : 'legal move');
+      if (isLast) parts.push(view.lastMove.from === sq ? 'last move from' : 'last move to');
+      cell.setAttribute('aria-label', parts.join(', '));
+      cell.tabIndex = sq === this.cursor ? 0 : -1;
     });
+    if (!this.cursor) this.setCursor(this.squareOfIndex(56));
   }
 
   squareFromPoint(x, y) {
@@ -97,10 +158,11 @@ export class Board {
     const cell = e.target.closest('.sq');
     if (!cell) return;
     const sq = cell.dataset.square;
-    e.preventDefault(); // no text selection / focus flicker while dragging
+    e.preventDefault(); // no text selection while dragging
+    this.setCursor(sq);
     if (this.canDrag(sq)) {
       this.drag = { from: sq, x: e.clientX, y: e.clientY, active: false, pointerId: e.pointerId };
-      this.root.setPointerCapture(e.pointerId);
+      this.root.setPointerCapture?.(e.pointerId);
     } else {
       this.drag = null;
     }
@@ -155,48 +217,63 @@ export class Board {
   }
 
   // Shows Q/R/B/N over the promotion square; resolves with the piece letter or null.
-  choosePromotion(square, color) {
+  // Focus then returns to the board: the promotion square, or `from` if cancelled.
+  choosePromotion(square, color, from = square) {
     this.closePromotion(null);
     return new Promise((resolve) => {
-      const idx = this.cells.findIndex((c) => c.dataset.square === square);
+      const idx = this.indexOfSquare(square);
       const col = idx % 8;
       const fromTop = Math.floor(idx / 8) === 0;
       const wrap = document.createElement('div');
       wrap.className = 'promo-backdrop';
       const list = document.createElement('div');
       list.className = 'promo';
-      list.setAttribute('role', 'listbox');
+      list.setAttribute('role', 'group');
       list.setAttribute('aria-label', 'Promote pawn to');
       list.style.left = `${col * 12.5}%`;
       list.style[fromTop ? 'top' : 'bottom'] = '0';
       const pieces = [['q', 'Queen'], ['r', 'Rook'], ['b', 'Bishop'], ['n', 'Knight']];
       if (!fromTop) pieces.reverse();
+      const buttons = [];
       for (const [p, name] of pieces) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.setAttribute('role', 'option');
         b.setAttribute('aria-label', name);
         b.className = 'piece ' + (color === 'w' ? 'white' : 'black');
         b.textContent = glyph(p);
         b.addEventListener('click', (e) => { e.stopPropagation(); this.closePromotion(p); });
         list.appendChild(b);
+        buttons.push(b);
       }
       wrap.addEventListener('pointerdown', (e) => { if (e.target === wrap) this.closePromotion(null); });
-      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); this.closePromotion(null); } };
-      document.addEventListener('keydown', onKey);
+      // Escape cancels; Up/Down move between choices; Tab stays inside the picker.
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); this.closePromotion(null); return; }
+        const i = buttons.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const next = (i + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+          buttons[next].focus();
+        } else if (e.key === 'Tab') {
+          e.preventDefault();
+          buttons[(i + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length].focus();
+        }
+      };
+      document.addEventListener('keydown', onKey, true);
       wrap.appendChild(list);
       this.root.parentElement.appendChild(wrap);
-      this.promo = { wrap, resolve, onKey };
-      list.querySelector('button').focus();
+      this.promo = { wrap, resolve, onKey, square, from };
+      buttons[fromTop ? 0 : buttons.length - 1].focus();
     });
   }
 
   closePromotion(choice) {
     if (!this.promo) return;
-    const { wrap, resolve, onKey } = this.promo;
+    const { wrap, resolve, onKey, square, from } = this.promo;
     this.promo = null;
-    document.removeEventListener('keydown', onKey);
+    document.removeEventListener('keydown', onKey, true);
     wrap.remove();
+    this.setCursor(choice ? square : from, { focus: true });
     resolve(choice);
   }
 }

@@ -2,12 +2,14 @@ import { Game, START_FEN } from './game.js';
 import { Engine, LEVELS, levelById, workerTransport } from './engine.js';
 import { Board, glyph } from './board.js';
 import { formatClock, parseClock } from './clock.js';
+import { announceAfterMove } from './speech.js';
 
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'chess-webapp:v1';
 const ROBOT = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="7" width="14" height="11" rx="2"/><path d="M12 3v4M9 12h.01M15 12h.01M9 15h6"/></svg>';
 const VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const COLOR = { w: 'White', b: 'Black' };
+const PIECE_NAME = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' };
 const fmtResult = (r) => r.replaceAll('1/2', '½').replace('-', '–');
 
 const state = {
@@ -93,12 +95,19 @@ function onSquare(sq, opts = {}) {
     tryMove(state.selected, sq);
     return;
   }
+  const before = state.selected;
   if (piece && piece.color === g.turn) {
     state.selected = state.selected === sq && !opts.dragStart ? null : sq;
   } else {
     state.selected = null;
   }
   render();
+  if (state.selected && state.selected !== before) {
+    const t = g.targets(state.selected);
+    announce(`${COLOR[piece.color]} ${PIECE_NAME[piece.type]} on ${sq} selected. ${t.length ? `Can move to ${t.join(', ')}.` : 'It has no legal moves.'}`);
+  } else if (!state.selected && before && !opts.dragStart) {
+    announce(piece && piece.color === g.turn ? 'Selection cleared.' : `${sq} isn’t a legal move. Selection cleared.`);
+  }
 }
 
 async function tryMove(from, to) {
@@ -108,13 +117,14 @@ async function tryMove(from, to) {
     // Illegal: keep the piece selected so the player can try again.
     state.selected = g.pieceAt(from)?.color === g.turn ? from : null;
     render();
+    announce(`${to} isn’t a legal move.`);
     return;
   }
   let promotion;
   if (g.isPromotion(from, to)) {
     state.selected = from;
     render();
-    promotion = await board.choosePromotion(to, g.turn);
+    promotion = await board.choosePromotion(to, g.turn, from);
     if (!promotion) { state.selected = null; render(); return; }
   }
   const move = g.move(from, to, promotion);
@@ -132,8 +142,25 @@ function afterMove(move) {
   state.viewPly = null;
   save();
   render();
+  announce(announceAfterMove(move, state.game.status(), state.settings.mode === 'computer' ? state.settings.humanColor : null));
   if (state.game.isOver()) showGameOver();
   else maybeEngineMove();
+}
+
+// Screen-reader announcements go through one polite live region. Clearing it first
+// makes an identical message (e.g. "Your move.") be read again. Messages that arrive
+// close together (your move, then an instant engine reply) are joined, not dropped.
+let announceTimer;
+let pendingAnnouncement = '';
+function announce(text) {
+  const el = $('announcer');
+  el.textContent = '';
+  pendingAnnouncement = pendingAnnouncement ? `${pendingAnnouncement} ${text}` : text;
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => {
+    el.textContent = pendingAnnouncement;
+    pendingAnnouncement = '';
+  }, 60);
 }
 
 // ---------- clocks ----------
@@ -155,6 +182,7 @@ function tickClock() {
     state.game.flagFall(color);
     save();
     render();
+    announce(state.game.status().title);
     showGameOver();
   }
 }
@@ -185,6 +213,9 @@ function startGame(settings) {
   state.clocks = s.clock ? { w: s.clock.base * 1000, b: s.clock.base * 1000, inc: s.clock.inc * 1000, lastTick: null } : null;
   save();
   render();
+  announce(s.mode === 'computer'
+    ? `New game against Stockfish, ${levelById(s.level).name}. You play ${COLOR[s.humanColor]}.${s.humanColor === 'b' ? ' Computer moves first.' : ' Your move.'}`
+    : 'New two-player game. White to move.');
   maybeEngineMove();
 }
 
@@ -213,6 +244,8 @@ function undo() {
   if (state.clocks) state.clocks.lastTick = performance.now();
   save();
   render();
+  const last = g.history().at(-1);
+  announce(`Move taken back. ${last ? `Last move: ${last.san}. ` : ''}${state.settings.mode === 'computer' && g.turn === state.settings.humanColor ? 'Your move.' : `${COLOR[g.turn]} to move.`}`);
   maybeEngineMove(); // e.g. human is Black and undid to the start
 }
 
@@ -226,6 +259,7 @@ async function resign() {
   g.resign(color);
   save();
   render();
+  announce(g.status().title);
   showGameOver();
 }
 
@@ -246,21 +280,30 @@ async function offerDraw() {
   g.agreeDraw();
   save();
   render();
+  announce(g.status().title);
   showGameOver();
 }
 
 function flip() {
   state.orientation = state.orientation === 'w' ? 'b' : 'w';
+  const refocus = board.hasFocus();
   render();
+  if (refocus) board.setCursor(board.cursor, { focus: true });
+  announce(`Board flipped. ${COLOR[state.orientation]} at the bottom.`);
 }
 
 function setView(ply) {
   const g = state.game;
   board.closePromotion(null);
   state.selected = null;
+  const prev = state.viewPly;
   if (ply === null || ply >= g.ply) state.viewPly = null;
   else state.viewPly = Math.max(0, ply);
   render();
+  if (prev !== state.viewPly) {
+    announce(state.viewPly === null ? 'Back to the current position.'
+      : state.viewPly === 0 ? 'Viewing the starting position.' : `Viewing the position after ${moveLabel(state.viewPly)}.`);
+  }
 }
 const goLive = () => setView(null);
 const currentPly = () => (state.viewPly === null ? state.game.ply : state.viewPly);
@@ -604,7 +647,7 @@ function wire() {
   $('go-export').onclick = exportPgn;
 
   document.addEventListener('keydown', (e) => {
-    if (document.querySelector('dialog[open]') || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || board.promo) return;
+    if (document.querySelector('dialog[open]') || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || board.promo || e.target.closest?.('.board')) return;
     if (e.key === 'ArrowLeft') { e.preventDefault(); setView(currentPly() - 1); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); setView(currentPly() + 1); }
     else if (e.key === 'Escape' && state.selected) { state.selected = null; render(); }

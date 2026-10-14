@@ -27,10 +27,11 @@
     <section class="play" aria-label="Board">
       <div class="play-inner">
         <div class="player" id="player-top"></div>
-        <div class="status" id="status" role="status" aria-live="polite"></div>
+        <div class="status" id="status"></div>
         <div class="board-wrap">
           <div id="board"></div>
         </div>
+        <p id="board-help" class="sr-only">Arrow keys move between squares. Enter or Space selects a piece, then press it on a destination square to move.</p>
         <div class="player" id="player-bottom"></div>
       </div>
     </section>
@@ -178,6 +179,7 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

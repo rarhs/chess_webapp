@@ -28,6 +28,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* Top bar */
 .topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; padding: 12px 32px; border-bottom: 1px solid var(--line); }
@@ -82,13 +83,16 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 
 /* Board */
 .board-wrap { position: relative; width: 100%; aspect-ratio: 1 / 1; container-type: inline-size; }
+/* Square fills. Every marker, the focus ring and the coordinates use --ink, which is
+   at least 4.6:1 against every fill below (plain, last-move and selected, all themes). */
 .board {
-  --light: #DCE3E8; --dark: #7E97A6; --last-l: #F1D88C; --last-d: #C9A94F; --sel-l: #A9CBE6; --sel-d: #5E8FB5;
-  width: 100%; height: 100%; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); grid-template-rows: repeat(8, minmax(0, 1fr));
+  --light: #DCE3E8; --dark: #7E97A6; --last-l: #F1D88C; --last-d: #C9A94F; --sel-l: #A9CBE6; --sel-d: #5E8FB5; --ink: #15171B;
+  width: 100%; height: 100%; display: flex; flex-direction: column;
   border-radius: 6px; overflow: hidden; box-shadow: 0 10px 40px rgba(0, 0, 0, .45); container-type: inline-size; touch-action: none; user-select: none; -webkit-user-select: none;
 }
 .board.theme-green { --light: #EBECD0; --dark: #739552; --last-l: #F5F682; --last-d: #B9CA43; --sel-l: #BBD3E8; --sel-d: #6B9BBF; }
 .board.theme-walnut { --light: #ECD7B6; --dark: #A8784F; --last-l: #F3DA8A; --last-d: #C99F4A; --sel-l: #B9D0E2; --sel-d: #6F93AE; }
+.rank { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); }
 .sq { position: relative; border: 0; padding: 0; margin: 0; display: flex; align-items: center; justify-content: center; cursor: default; -webkit-tap-highlight-color: transparent; }
 .board.interactive .sq { cursor: pointer; }
 .sq.light { background-color: var(--light); }
@@ -98,22 +102,32 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .sq.light.selected { background-color: var(--sel-l); }
 .sq.dark.selected { background-color: var(--sel-d); }
 .sq.check { background-image: radial-gradient(circle, rgba(229, 72, 77, .95) 0%, rgba(229, 72, 77, .6) 35%, rgba(229, 72, 77, 0) 72%); }
-/* Legal targets: a square tint rather than dots */
-.sq.target::after, .sq.target-capture::after { content: ''; position: absolute; inset: 0; pointer-events: none; }
-.sq.target::after { background: rgba(21, 23, 27, .2); box-shadow: inset 0 0 0 2px rgba(21, 23, 27, .28); }
-.sq.target-capture::after { box-shadow: inset 0 0 0 0.9cqw rgba(178, 40, 48, .75); }
-.sq.hover::before { content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 0 0.6cqw rgba(255, 255, 255, .75); pointer-events: none; z-index: 1; }
-.sq:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; z-index: 2; }
+/* Markers differ by shape, not just colour:
+   last move = thin solid frame, selected = thick solid frame,
+   legal move = dashed frame, legal capture = corner triangles. */
+.sq::before, .sq::after { content: none; position: absolute; inset: 0; pointer-events: none; z-index: 2; box-sizing: border-box; }
+.sq.last::before { content: ''; border: 0.45cqw solid var(--ink); }
+.sq.selected::after { content: ''; border: 1.1cqw solid var(--ink); }
+.sq.target::after { content: ''; border: 0.55cqw dashed var(--ink); }
+.sq.target-capture::after {
+  content: '';
+  background:
+    linear-gradient(135deg, var(--ink) 0 16%, transparent 16%),
+    linear-gradient(225deg, var(--ink) 0 16%, transparent 16%),
+    linear-gradient(315deg, var(--ink) 0 16%, transparent 16%),
+    linear-gradient(45deg, var(--ink) 0 16%, transparent 16%);
+}
+.sq.hover { box-shadow: inset 0 0 0 0.7cqw #FFFFFF, inset 0 0 0 1.2cqw var(--ink); }
+/* Two-tone focus ring: white outer band, dark inner band, so one of them always contrasts. */
+.sq:focus-visible { outline: 0.6cqw solid #FFFFFF; outline-offset: -0.6cqw; box-shadow: inset 0 0 0 1.3cqw var(--ink); z-index: 3; }
 .piece { font-family: var(--pieces); font-size: 9.6cqw; line-height: 1; pointer-events: none; position: relative; z-index: 1; }
 .piece.white { color: #FFFFFF; text-shadow: 0 0 1px #111, 0 0 1px #111, 0 1px 1px #111, 0 2px 3px rgba(0, 0, 0, .35); }
 .piece.black { color: #1C1D21; text-shadow: 0 1px 0 rgba(255, 255, 255, .35), 0 2px 3px rgba(0, 0, 0, .3); }
 .piece.lifted { opacity: .3; }
 .piece.ghost { position: fixed; left: 0; top: 0; display: flex; align-items: center; justify-content: center; z-index: 1000; pointer-events: none; filter: drop-shadow(0 6px 8px rgba(0, 0, 0, .4)); }
-.coord { position: absolute; font: 600 1.9cqw var(--sans); pointer-events: none; }
-.coord.rank { top: 0.4cqw; left: 0.6cqw; }
-.coord.file { bottom: 0.3cqw; right: 0.7cqw; }
-.sq.light .coord { color: var(--dark); }
-.sq.dark .coord { color: var(--light); }
+.coord { position: absolute; font: 700 1.9cqw var(--sans); pointer-events: none; color: var(--ink); z-index: 1; }
+.coord.rank-label { top: 0.4cqw; left: 0.7cqw; }
+.coord.file-label { bottom: 0.3cqw; right: 0.8cqw; }
 
 /* Promotion picker */
 .promo-backdrop { position: absolute; inset: 0; background: rgba(16, 18, 21, .45); z-index: 5; border-radius: 6px; }
